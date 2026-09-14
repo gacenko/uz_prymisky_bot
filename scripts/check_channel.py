@@ -163,6 +163,18 @@ def send_to_family_chat(text: str) -> None:
 
 
 def main() -> None:
+    test_message = os.environ.get("TEST_MESSAGE", "").strip()
+    if test_message:
+        category = classify(test_message)
+        print(f"category={category} is_relevant={is_relevant(test_message)}")
+        if category and is_relevant(test_message):
+            formatted = format_message(test_message, category, "https://t.me/UZprymisky/TEST")
+            send_to_family_chat(formatted)
+            print("Тестове сповіщення надіслано:\n" + formatted)
+        else:
+            print("Тестовий текст не пройшов фільтр (не той тип або не той поїзд) — нічого не надіслано.")
+        return
+
     last_id = read_last_id()
     bootstrap = last_id == 0
 
