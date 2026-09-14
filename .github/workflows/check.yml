@@ -3,12 +3,7 @@ name: Check UZprymisky channel
 on:
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
-    inputs:
-      test_message:
-        description: "Тестовий текст поста (лишити пустим для звичайного запуску)"
-        required: false
-        default: ""
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -32,7 +27,6 @@ jobs:
           TG_SESSION: ${{ secrets.TG_SESSION }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TEST_MESSAGE: ${{ github.event.inputs.test_message }}
 
       - name: Commit updated state
         run: |
