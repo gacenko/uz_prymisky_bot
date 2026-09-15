@@ -16,10 +16,15 @@ scripts/check_channel.py
 Сімейний чат
 ```
 
-Запускається кроном через GitHub Actions (`.github/workflows/check.yml`) кожні
-5 хвилин. Стан (id останнього обробленого повідомлення,
-`state/last_message_id.txt`) коміститься назад у репозиторій самим воркфлоу —
-окремого сервера не потрібно.
+Працює як **постійно запущений процес** (`client.run_until_disconnected()`),
+підписаний на нові повідомлення каналу через MTProto (Telethon `events`) —
+реагує на пост за секунди, без опитування за розкладом і без файлу стану.
+
+GitHub Actions `schedule` тут свідомо не використовується: на малоактивних
+репозиторіях GitHub може відкладати "щохвилинні" scheduled-запуски на години
+замість заявлених 5 хвилин (перевірено на практиці — спостерігались розриви
+2+ години). Для сповіщень, які мають приходити оперативно, потрібен
+always-on хостинг (Railway, Fly.io, свій сервер/Raspberry Pi тощо), а не крон.
 
 Чому userbot, а не звичайний бот: Bot API отримує пости з каналу лише якщо бот
 — адмін цього каналу. Зробити свого бота адміном офіційного каналу
@@ -54,21 +59,27 @@ python scripts/generate_session.py
   `https://api.telegram.org/bot<TG_BOT_TOKEN>/getUpdates`
   і знайди `"chat":{"id": ...}` — для групи це буде від'ємне число.
 
-### 4. GitHub secrets
-У репозиторії → **Settings → Secrets and variables → Actions** додати:
-- `TG_API_ID`
-- `TG_API_HASH`
-- `TG_SESSION`
-- `TG_BOT_TOKEN`
-- `TG_CHAT_ID`
+### 4. Деплой на Railway (always-on)
 
-### 5. Перший запуск (bootstrap)
-Перший прогін воркфлоу нічого не надсилає — він лише запам'ятовує id
-останнього поточного повідомлення в каналі (`state/last_message_id.txt`), щоб
-не заспамити чат усією історією каналу. Всі наступні запуски вже
-надсилатимуть тільки нові пости.
+1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → обрати `uz_prymisky_bot`.
+2. У вкладці **Variables** додати 5 змінних (ті самі значення, що зібрали вище):
+   - `TG_API_ID`
+   - `TG_API_HASH`
+   - `TG_SESSION`
+   - `TG_BOT_TOKEN`
+   - `TG_CHAT_ID`
+3. У **Settings → Deploy** вказати **Start Command**:
+   ```
+   python scripts/check_channel.py
+   ```
+   (Railway сам визначить Python-проєкт з `requirements.txt` і встановить залежності через Nixpacks — окремо нічого білдити не треба).
+4. Задеплоїти. У логах сервісу має з'явитись:
+   ```
+   Підключено, слухаю нові пости в @UZprymisky...
+   ```
+   Це означає, що процес живий і чекає на нові пости — жодних тестових повідомлень при старті не надсилається.
 
-Запустити вручну: **Actions → Check UZprymisky channel → Run workflow**.
+Railway автоматично передеплоїть при кожному новому `git push` у `main`.
 
 ## Фільтр
 
