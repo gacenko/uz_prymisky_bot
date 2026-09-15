@@ -56,6 +56,10 @@ KEYWORDS = [
     "продовж",   # продовжуємо рух
 ]
 
+# Розрахунковий час прибуття/відправлення з Княжичів раніше цього — не турбуємо
+# сповіщенням (запізнення все одно не критичне для ранкової поїздки).
+CUTOFF_TIME = "09:00"
+
 TRAIN_NUM_RE = re.compile(r"№\s*([\d/]+)")
 
 DELAY_RE = re.compile(
@@ -113,30 +117,45 @@ def classify(text: str) -> str | None:
     return "other"
 
 
-def format_message(text: str, category: str, link: str) -> str:
-    match = DELAY_RE.search(text)
-    if match and category == "delay":
-        line1 = match.group("full").strip()
+def build_delay_blocks(text: str) -> tuple[list[str], bool]:
+    """Один пост може містити кілька "Поїзд №... курсує..." речень одразу
+    (один на кожен потяг). Обробляємо кожне окремо — інакше беремо дані не
+    того потяга, якщо перше речення в пості не про наш маршрут.
+
+    Повертає (блоки для релевантних потягів, чи взагалі знайшлось хоч одне
+    структуроване речення — щоб main() міг відрізнити "нічого релевантного/
+    все відсіклось по 9:00" від "формат посту взагалі не розпізнався").
+    """
+    matches = list(DELAY_RE.finditer(text))
+    blocks = []
+    for m in matches:
+        train_key = next((n for n in m.group("num").split("/") if n in TRAIN_SCHEDULE), None)
+        if not train_key:
+            continue
+
+        line1 = m.group("full").strip()
         if not line1.endswith("."):
             line1 += "."
         lines = [f"🚆 {line1}"]
 
-        train_key = next((n for n in match.group("num").split("/") if n in TRAIN_SCHEDULE), None)
-        if train_key:
-            delay_min = parse_delay_minutes(match.group("delay_text"))
-            if delay_min is not None:
-                sched = TRAIN_SCHEDULE[train_key]
-                new_dep = add_minutes(sched["dep"], delay_min)
-                new_arr = add_minutes(sched["arr"], delay_min)
-                lines.append(f"🕐 Розрахунково: Княжичі відпр. {new_dep} → Березняки приб. {new_arr}")
+        delay_min = parse_delay_minutes(m.group("delay_text"))
+        if delay_min is not None:
+            sched = TRAIN_SCHEDULE[train_key]
+            new_dep = add_minutes(sched["dep"], delay_min)
+            if new_dep < CUTOFF_TIME:
+                continue
+            new_arr = add_minutes(sched["arr"], delay_min)
+            lines.append(f"🕐 Розрахунково: Княжичі відпр. {new_dep} → Березняки приб. {new_arr}")
 
-        body = "\n".join(lines)
-    else:
-        cleaned = BOILERPLATE_RE.sub("", text).strip()
-        icon = {"delay": "⏱", "cancel": "⛔", "resume": "✅"}.get(category, "🚆")
-        body = f"{icon} {cleaned}"
+        blocks.append("\n".join(lines))
 
-    return f"{body}\n\n{link}"
+    return blocks, bool(matches)
+
+
+def format_message(text: str, category: str, link: str) -> str:
+    cleaned = BOILERPLATE_RE.sub("", text).strip()
+    icon = {"delay": "⏱", "cancel": "⛔", "resume": "✅"}.get(category, "🚆")
+    return f"{icon} {cleaned}\n\n{link}"
 
 
 def read_last_id() -> int:
@@ -193,11 +212,24 @@ def main() -> None:
             category = classify(text)
             if category is None:
                 continue
-            if not is_relevant(text):
-                continue
 
             link = f"https://t.me/{SOURCE_CHANNEL}/{msg.id}"
-            formatted = format_message(text, category, link)
+
+            if category == "delay":
+                blocks, matched_structured = build_delay_blocks(text)
+                if blocks:
+                    formatted = "\n\n".join(blocks) + f"\n\n{link}"
+                elif not matched_structured and is_relevant(text):
+                    # Нетиповий формат посту (регулярка не розпарсила), але наш поїзд
+                    # згадується — краще переслати як є, ніж мовчки проґавити.
+                    formatted = format_message(text, category, link)
+                else:
+                    continue
+            else:
+                if not is_relevant(text):
+                    continue
+                formatted = format_message(text, category, link)
+
             send_to_family_chat(formatted)
             print(f"Sent message id={msg.id} category={category}")
 
