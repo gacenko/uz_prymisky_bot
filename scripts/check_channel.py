@@ -1,16 +1,17 @@
 """
-Читає нові пости з публічного каналу @UZprymisky (userbot через Telethon),
-фільтрує затримки/скасування/відновлення руху для поїздів маршруту Ніжин –
-Київ (дільниця Княжичі → Березняки) і шле стисле сповіщення через звичайного
-Telegram-бота у сімейний чат.
+Reads new posts from the public @UZprymisky channel (userbot via Telethon),
+filters delay/cancellation/resume-of-service posts for trains on the Nizhyn -
+Kyiv route (Kniazhychi -> Berezniaky section), and forwards a short
+notification through a regular Telegram bot to the family chat.
 
-Запускається одноразово за подією `repository_dispatch` (див.
-.github/workflows/check.yml) — тригерить цю подію Cloudflare Worker з Cron
-Trigger (worker/), а не нативний GitHub Actions `schedule:` (той на практиці
-відкладає часті scheduled-запуски на години замість заявлених хвилин).
+Runs once per `workflow_dispatch` call (see .github/workflows/check.yml),
+triggered by a Cloudflare Worker Cron Trigger (worker/) instead of GitHub
+Actions' native `schedule:` (which in practice delayed frequent scheduled
+runs by hours instead of the configured minutes).
 
-Стан (id останнього обробленого повідомлення) зберігається у
-state/last_message_id.txt і коміститься назад у репозиторій самим воркфлоу.
+State (id of the last processed message) is kept in
+state/last_message_id.txt and committed back to the repo by the workflow
+itself.
 """
 
 import os
@@ -30,9 +31,10 @@ SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL", "UZprymisky")
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "state", "last_message_id.txt")
 
-# Розклад приміських поїздів напрямку Ніжин – Київ на дільниці Княжичі → Березняки
-# (маршрут тещі: Бровари → Київ). Джерело: розклад руху приміських поїздів УЗ,
-# чинний 2026-06-28..2026-12-12. При зміні сезонного розкладу — оновити тут.
+# Suburban train timetable for the Nizhyn - Kyiv direction on the
+# Kniazhychi -> Berezniaky section (the family's commute: Brovary -> Kyiv).
+# Source: UZ suburban timetable, valid 2026-06-28..2026-12-12. Update here
+# when the seasonal timetable changes.
 TRAIN_SCHEDULE = {
     "6903": {"dep": "05:36", "arr": "06:01"},
     "6905": {"dep": "06:03", "arr": "06:29"},
@@ -45,19 +47,19 @@ TRAIN_SCHEDULE = {
     "6927": {"dep": "22:08", "arr": "22:32"},
 }
 
-# Пости, що містять хоч один з цих коренів слів — пересилаємо (за умови що стосуються
-# поїзда з TRAIN_SCHEDULE вище). Решту (новини, реклама, оголошення про майбутнє
-# корегування розкладу тощо) — ігноруємо.
+# Posts containing at least one of these word roots get forwarded (provided
+# they also concern a train from TRAIN_SCHEDULE above). Everything else
+# (news, ads, announcements of future timetable changes, etc.) is ignored.
 KEYWORDS = [
-    "затримк",   # затримка/затримується
-    "скасов",    # скасовано/скасування
-    "відмін",    # відмінено (синонім скасування)
-    "відновл",   # відновлено рух
-    "продовж",   # продовжуємо рух
+    "затримк",   # delay(ed)
+    "скасов",    # cancelled/cancellation
+    "відмін",    # cancelled (synonym)
+    "відновл",   # service resumed
+    "продовж",   # continuing/resuming
 ]
 
-# Розрахунковий час прибуття/відправлення з Княжичів раніше цього — не турбуємо
-# сповіщенням (запізнення все одно не критичне для ранкової поїздки).
+# Skip the notification if the recalculated Kniazhychi time is still earlier
+# than this — a delay that still clears before 9am isn't worth a heads-up.
 CUTOFF_TIME = "09:00"
 
 TRAIN_NUM_RE = re.compile(r"№\s*([\d/]+)")
@@ -73,7 +75,7 @@ DELAY_DURATION_RE = re.compile(
     r"(?:(?P<hours>\d+)\s*год\.?)?\s*(?:(?P<mins>\d+)\s*хв\.?)?", re.IGNORECASE
 )
 
-# Типовий "аварійний" футер, що повторюється майже в кожному пості й не потрібен у сімейному чаті.
+# The standard "emergency" footer repeated in almost every post — not needed in the family chat.
 BOILERPLATE_RE = re.compile(
     r"❗️?\s*У разі підвищеної небезпеки.*", re.IGNORECASE | re.DOTALL
 )
@@ -118,13 +120,14 @@ def classify(text: str) -> str | None:
 
 
 def build_delay_blocks(text: str) -> tuple[list[str], bool]:
-    """Один пост може містити кілька "Поїзд №... курсує..." речень одразу
-    (один на кожен потяг). Обробляємо кожне окремо — інакше беремо дані не
-    того потяга, якщо перше речення в пості не про наш маршрут.
+    """A single post can contain several "Поїзд №... курсує..." sentences at
+    once (one per train). Each is processed independently — otherwise we'd
+    grab data from the wrong train whenever the first sentence in a post
+    isn't about our route.
 
-    Повертає (блоки для релевантних потягів, чи взагалі знайшлось хоч одне
-    структуроване речення — щоб main() міг відрізнити "нічого релевантного/
-    все відсіклось по 9:00" від "формат посту взагалі не розпізнався").
+    Returns (blocks for relevant trains, whether at least one structured
+    sentence was found at all — so main() can tell "nothing relevant / all
+    cut off by 09:00" apart from "post format wasn't recognized at all").
     """
     matches = list(DELAY_RE.finditer(text))
     blocks = []
@@ -220,8 +223,8 @@ def main() -> None:
                 if blocks:
                     formatted = "\n\n".join(blocks) + f"\n\n{link}"
                 elif not matched_structured and is_relevant(text):
-                    # Нетиповий формат посту (регулярка не розпарсила), але наш поїзд
-                    # згадується — краще переслати як є, ніж мовчки проґавити.
+                    # Unusual post format (regex didn't parse it), but our train is
+                    # mentioned — better to forward as-is than silently miss it.
                     formatted = format_message(text, category, link)
                 else:
                     continue
