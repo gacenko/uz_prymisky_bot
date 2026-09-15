@@ -1,0 +1,23 @@
+{
+  "name": "uz-prymisky-bot-cron",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-15",
+
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
+
+  "vars": {
+    "GITHUB_OWNER": "gacenko",
+    "GITHUB_REPO": "uz_prymisky_bot"
+  },
+
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    }
+  }
+}

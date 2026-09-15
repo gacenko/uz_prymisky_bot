@@ -8,23 +8,29 @@
 ## Архітектура
 
 ```
-@UZprymisky (публічний канал)
-    ↓ Telethon (userbot, твій особистий акаунт — читає без прав адміна)
+Cloudflare Worker (worker/, Cron Trigger, раз на 10 хв)
+    ↓ POST /actions/workflows/check.yml/dispatches (workflow_dispatch API)
+GitHub Actions (.github/workflows/check.yml)
+    ↓
 scripts/check_channel.py
+    ↓ Telethon (userbot, твій особистий акаунт — читає без прав адміна)
+@UZprymisky (публічний канал)
     ↓ фільтр за ключовими словами + парсинг "Поїзд №... курсує... із затримкою..."
     ↓ Telegram Bot API (sendMessage)
 Сімейний чат
 ```
 
-Працює як **постійно запущений процес** (`client.run_until_disconnected()`),
-підписаний на нові повідомлення каналу через MTProto (Telethon `events`) —
-реагує на пост за секунди, без опитування за розкладом і без файлу стану.
+Чому не нативний `schedule:` у GitHub Actions: на практиці GitHub відкладає
+часті scheduled-запуски на години замість заявлених хвилин (спостерігались
+розриви 2+ години замість `*/5 * * * *`). А `workflow_dispatch`, викликаний
+через API ззовні, GitHub виконує миттєво — це не крон-черга, а вхідна подія,
+так само як `running_sync` тригерить свій sync.yml через Strava webhook →
+Cloudflare Worker. Тут немає Strava, тому таймер — сам Worker (Cron Trigger),
+а не зовнішній сервіс.
 
-GitHub Actions `schedule` тут свідомо не використовується: на малоактивних
-репозиторіях GitHub може відкладати "щохвилинні" scheduled-запуски на години
-замість заявлених 5 хвилин (перевірено на практиці — спостерігались розриви
-2+ години). Для сповіщень, які мають приходити оперативно, потрібен
-always-on хостинг (Railway, Fly.io, свій сервер/Raspberry Pi тощо), а не крон.
+Чому не always-on процес (Railway/VPS): коштує гроші або вимагає ручного
+адміністрування сервера. Cloudflare Worker Cron Trigger безкоштовний і
+надійний, і вже частина наявної інфраструктури.
 
 Чому userbot, а не звичайний бот: Bot API отримує пости з каналу лише якщо бот
 — адмін цього каналу. Зробити свого бота адміном офіційного каналу
@@ -32,11 +38,15 @@ always-on хостинг (Railway, Fly.io, свій сервер/Raspberry Pi т
 особистий акаунт (Telethon), а на **відправку** у сімейний чат — звичайний бот
 через BotFather (там ти вже адмін/учасник, і Bot API достатньо).
 
+Стан (id останнього обробленого повідомлення, `state/last_message_id.txt`)
+коміститься назад у репозиторій самим воркфлоу — кожен запуск короткоживучий
+(за подією), тож треба знати, де зупинились минулого разу.
+
 ## Одноразове налаштування
 
 ### 1. Отримати API_ID / API_HASH
-Зайти на https://my.telegram.org → **API development tools** → створити
-застосунок → скопіювати `api_id` і `api_hash`.
+Зайти на https://my.telegram.org/apps → **Create new application** →
+скопіювати `api_id` і `api_hash`.
 
 ### 2. Згенерувати TG_SESSION (тільки локально, не в CI!)
 
@@ -53,33 +63,56 @@ python scripts/generate_session.py
 ### 3. Дані бота для відправки у сімейний чат
 - `TG_BOT_TOKEN` — токен вже наявного бота (BotFather → `/mybots` → **API
   Token**, якщо не пам'ятаєш).
-- Додай цього бота учасником у сімейний чат.
-- `TG_CHAT_ID` — напиши будь-яке повідомлення в сімейному чаті (щоб бот його
-  побачив), потім відкрий у браузері:
+- Додай цього бота учасником у сімейний чат (адміном чату, бо звичайні
+  учасники не завжди можуть додавати ботів).
+- `TG_CHAT_ID` — напиши в чаті `/id` (щоб бот побачив хоч одне повідомлення),
+  потім відкрий у браузері:
   `https://api.telegram.org/bot<TG_BOT_TOKEN>/getUpdates`
   і знайди `"chat":{"id": ...}` — для групи це буде від'ємне число.
 
-### 4. Деплой на Railway (always-on)
+### 4. GitHub secrets
+Репозиторій → **Settings → Secrets and variables → Actions** → додати:
+- `TG_API_ID`
+- `TG_API_HASH`
+- `TG_SESSION`
+- `TG_BOT_TOKEN`
+- `TG_CHAT_ID`
 
-1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → обрати `uz_prymisky_bot`.
-2. У вкладці **Variables** додати 5 змінних (ті самі значення, що зібрали вище):
-   - `TG_API_ID`
-   - `TG_API_HASH`
-   - `TG_SESSION`
-   - `TG_BOT_TOKEN`
-   - `TG_CHAT_ID`
-3. У **Settings → Deploy** вказати **Start Command**:
-   ```
-   python scripts/check_channel.py
-   ```
-   (Railway сам визначить Python-проєкт з `requirements.txt` і встановить залежності через Nixpacks — окремо нічого білдити не треба).
-4. Задеплоїти. У логах сервісу має з'явитись:
-   ```
-   Підключено, слухаю нові пости в @UZprymisky...
-   ```
-   Це означає, що процес живий і чекає на нові пости — жодних тестових повідомлень при старті не надсилається.
+Репозиторій має бути **публічним** (Settings → Danger Zone → Change
+visibility), інакше часті запуски Actions на приватному репо можуть
+вичерпати безкоштовний ліміт (2000 хв/міс) і почати коштувати гроші. У коді
+немає секретів — токени лежать окремо в зашифрованих GitHub Secrets.
 
-Railway автоматично передеплоїть при кожному новому `git push` у `main`.
+### 5. GitHub PAT для Cloudflare Worker
+Потрібен fine-grained Personal Access Token, яким Worker буде запускати
+`check.yml` через API (аналогічно `cloudflare-strava-trigger` у
+`running_sync` — можна подивитись його права для орієнтиру):
+
+1. https://github.com/settings/personal-access-tokens/new
+2. **Repository access** → Only select repositories → `uz_prymisky_bot`
+3. **Permissions → Repository permissions → Actions** → Read and write
+4. Створити, скопіювати токен (показується один раз)
+
+### 6. Деплой Cloudflare Worker
+
+```bash
+cd worker
+npx wrangler secret put GH_TOKEN   # вставити PAT з кроку 5
+npx wrangler deploy
+```
+
+`GITHUB_OWNER`/`GITHUB_REPO` вже прописані у `worker/wrangler.jsonc`. Cron
+Trigger стоїть на `*/10 * * * *` — раз на 10 хв Worker робить
+`workflow_dispatch` для `check.yml`.
+
+### 7. Перший запуск (bootstrap)
+Перший прогін нічого не надсилає — лише запам'ятовує id останнього поточного
+повідомлення в каналі (`state/last_message_id.txt`), щоб не заспамити чат
+усією історією каналу. Всі наступні запуски вже надсилатимуть тільки нові
+пости.
+
+Запустити вручну (не чекаючи Worker): **Actions → Check UZprymisky channel →
+Run workflow**.
 
 ## Фільтр
 
@@ -104,11 +137,14 @@ Railway автоматично передеплоїть при кожному н
 УЗ змінить сезонний розклад — оновити часи/номери поїздів у словнику вручну.
 
 ## Відомі обмеження
-- GitHub Actions може призупинити scheduled workflow, якщо репозиторій
-  неактивний 60+ днів — тоді треба раз натиснути **Run workflow** вручну.
-- `cron: */5 * * * *` — це мінімальний інтервал, який гарантує GitHub Actions;
-  фактичний запуск може запізнюватись на кілька хвилин під навантаженням.
+- Затримка сповіщення — до ~10 хв (інтервал Cron Trigger) + кілька секунд на
+  виконання самої джоби. Якщо треба швидше — зменшити `crons` у
+  `worker/wrangler.jsonc`, але тоді слідкувати за витратами Actions-хвилин
+  (репо публічне — витрати безлімітні й безкоштовні, тож можна сміливо
+  зменшувати).
 - Парсинг структурованих полів (номер поїзда/станція/хвилини) працює для
   формату "Поїзд №X ... курсує зі станції Y із затримкою N хв". Для інших
   форматів (скасування, зв'язок з іншим поїздом) наразі просто пересилається
   очищений текст поста без футера про укриття.
+- `state/last_message_id.txt` коміститься ботом (github-actions[bot]) — якщо
+  редагувати репозиторій локально, не забути `git pull` перед пушем.

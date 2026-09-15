@@ -1,14 +1,16 @@
 """
-Слухає нові пости в публічному каналі @UZprymisky (userbot через Telethon,
-подієво — без опитування за розкладом), фільтрує затримки/скасування/
-відновлення руху для поїздів маршруту Ніжин – Київ (дільниця Княжичі →
-Березняки) і одразу шле стисле сповіщення через звичайного Telegram-бота у
-сімейний чат.
+Читає нові пости з публічного каналу @UZprymisky (userbot через Telethon),
+фільтрує затримки/скасування/відновлення руху для поїздів маршруту Ніжин –
+Київ (дільниця Княжичі → Березняки) і шле стисле сповіщення через звичайного
+Telegram-бота у сімейний чат.
 
-Довготривалий процес (client.run_until_disconnected()) — має крутитись на
-always-on хостингу (Railway тощо), а не запускатись періодично. GitHub Actions
-schedule для цього не годиться: на малоактивних репо GitHub може відкладати
-scheduled-запуски на години замість заявлених 5 хвилин.
+Запускається одноразово за подією `repository_dispatch` (див.
+.github/workflows/check.yml) — тригерить цю подію Cloudflare Worker з Cron
+Trigger (worker/), а не нативний GitHub Actions `schedule:` (той на практиці
+відкладає часті scheduled-запуски на години замість заявлених хвилин).
+
+Стан (id останнього обробленого повідомлення) зберігається у
+state/last_message_id.txt і коміститься назад у репозиторій самим воркфлоу.
 """
 
 import os
@@ -16,7 +18,6 @@ import re
 from datetime import datetime, timedelta
 
 import requests
-from telethon import events
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 
@@ -26,6 +27,8 @@ SESSION = os.environ["TG_SESSION"]
 BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 CHAT_ID = os.environ["TG_CHAT_ID"]
 SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL", "UZprymisky")
+
+STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "state", "last_message_id.txt")
 
 # Розклад приміських поїздів напрямку Ніжин – Київ на дільниці Княжичі → Березняки
 # (маршрут тещі: Бровари → Київ). Джерело: розклад руху приміських поїздів УЗ,
@@ -136,6 +139,20 @@ def format_message(text: str, category: str, link: str) -> str:
     return f"{body}\n\n{link}"
 
 
+def read_last_id() -> int:
+    if not os.path.exists(STATE_FILE):
+        return 0
+    with open(STATE_FILE, encoding="utf-8") as f:
+        content = f.read().strip()
+        return int(content) if content else 0
+
+
+def write_last_id(msg_id: int) -> None:
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        f.write(str(msg_id))
+
+
 def send_to_family_chat(text: str) -> None:
     resp = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -150,31 +167,42 @@ def send_to_family_chat(text: str) -> None:
         print(f"Bot API error {resp.status_code}: {resp.text}")
 
 
-client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
-
-
-@client.on(events.NewMessage(chats=SOURCE_CHANNEL))
-def handle_new_post(event):
-    text = event.raw_text or ""
-    if not text:
-        return
-
-    category = classify(text)
-    if category is None:
-        return
-    if not is_relevant(text):
-        return
-
-    link = f"https://t.me/{SOURCE_CHANNEL}/{event.id}"
-    formatted = format_message(text, category, link)
-    send_to_family_chat(formatted)
-    print(f"Sent message id={event.id} category={category}")
-
-
 def main() -> None:
-    client.start()
-    print(f"Підключено, слухаю нові пости в @{SOURCE_CHANNEL}...")
-    client.run_until_disconnected()
+    last_id = read_last_id()
+    bootstrap = last_id == 0
+
+    with TelegramClient(StringSession(SESSION), API_ID, API_HASH) as client:
+        entity = client.get_entity(SOURCE_CHANNEL)
+
+        if bootstrap:
+            latest = client.get_messages(entity, limit=1)
+            if latest:
+                write_last_id(latest[0].id)
+                print(f"Bootstrap: set last_message_id={latest[0].id}, нічого не надсилаю.")
+            return
+
+        messages = list(client.iter_messages(entity, min_id=last_id, reverse=True, limit=200))
+
+        max_id = last_id
+        for msg in messages:
+            max_id = max(max_id, msg.id)
+            text = msg.message or ""
+            if not text:
+                continue
+
+            category = classify(text)
+            if category is None:
+                continue
+            if not is_relevant(text):
+                continue
+
+            link = f"https://t.me/{SOURCE_CHANNEL}/{msg.id}"
+            formatted = format_message(text, category, link)
+            send_to_family_chat(formatted)
+            print(f"Sent message id={msg.id} category={category}")
+
+        if max_id != last_id:
+            write_last_id(max_id)
 
 
 if __name__ == "__main__":
