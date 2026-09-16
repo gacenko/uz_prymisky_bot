@@ -60,7 +60,7 @@ KEYWORDS = [
 
 # Skip the notification if the recalculated Kniazhychi time is still earlier
 # than this — a delay that still clears before 9am isn't worth a heads-up.
-CUTOFF_TIME = "09:00"
+CUTOFF_TIME = "09:30"
 
 TRAIN_NUM_RE = re.compile(r"№\s*([\d/]+)")
 
@@ -127,7 +127,7 @@ def build_delay_blocks(text: str) -> tuple[list[str], bool]:
 
     Returns (blocks for relevant trains, whether at least one structured
     sentence was found at all — so main() can tell "nothing relevant / all
-    cut off by 09:00" apart from "post format wasn't recognized at all").
+    cut off by CUTOFF_TIME" apart from "post format wasn't recognized at all").
     """
     matches = list(DELAY_RE.finditer(text))
     blocks = []
