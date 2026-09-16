@@ -4,12 +4,6 @@ on:
   repository_dispatch:
     types: [check-channel]
   workflow_dispatch: {}
-  # TEMPORARY fallback while the Cloudflare Worker's Cron Trigger is stuck
-  # account-wide (confirmed: zero invocations even on a brand-new Worker with
-  # a per-minute cron -- this is on Cloudflare's side, not our config).
-  # Remove once Cloudflare fixes it and the Worker starts firing again.
-  schedule:
-    - cron: "*/10 * * * *"
 
 permissions:
   contents: write
