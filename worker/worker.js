@@ -13,7 +13,9 @@ export default {
           },
           body: JSON.stringify({ ref: "main" }),
         }
-      )
+      ).then(async (response) => {
+        console.log("GitHub dispatch status:", response.status, await response.text());
+      })
     );
   },
 };
