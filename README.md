@@ -8,7 +8,7 @@
 ## Архітектура
 
 ```
-Cloudflare Worker (worker/, Cron Trigger, раз на 10 хв)
+Cloudflare Worker (worker/, Cron Trigger, раз на 10 хв, лише 7:00-12:00 за Києвом)
     ↓ POST /actions/workflows/check.yml/dispatches (workflow_dispatch API)
 GitHub Actions (.github/workflows/check.yml)
     ↓
@@ -144,6 +144,15 @@ Run workflow**.
 
 `TRAIN_SCHEDULE` заповнений з розкладу, чинного 2026-06-28..2026-12-12. Коли
 УЗ змінить сезонний розклад — оновити часи/номери поїздів у словнику вручну.
+
+## Активне вікно
+
+Worker (`worker/worker.js`) перевіряє поточний час за Києвом (`Europe/Kyiv`,
+автоматично враховує перехід на зимовий час) і взагалі не викликає
+`workflow_dispatch`, якщо зараз не **7:00-12:00**. Це не фільтр на рівні
+даних (як `CUTOFF_TIME` у Python-скрипті), а економія — GitHub Actions
+просто не запускається поза цим вікном, бо о іншій порі перевіряти канал
+не має сенсу. Межі — `ACTIVE_HOURS_START`/`ACTIVE_HOURS_END` у `worker.js`.
 
 ## Відомі обмеження
 - Затримка сповіщення — до ~10 хв (інтервал Cron Trigger) + кілька секунд на
