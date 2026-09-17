@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+# Serialize runs -- overlapping runs can both read the same last_message_id
+# before either commits its update, sending the same post twice. Queue
+# instead of running concurrently (never cancel a run already in progress).
+concurrency:
+  group: check-uzprymisky-channel
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest

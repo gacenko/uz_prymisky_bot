@@ -32,7 +32,9 @@ SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL", "UZprymisky")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "state", "last_message_id.txt")
 
 # Suburban train timetable for the Nizhyn - Kyiv direction on the
-# Kniazhychi -> Berezniaky section (the family's commute: Brovary -> Kyiv).
+# Kniazhychi -> Berezniaky section (the family's morning commute: Brovary ->
+# Kyiv). Only morning trains -- matches the worker's 7:00-12:00 active
+# window; afternoon/evening trains on this route aren't relevant.
 # Source: UZ suburban timetable, valid 2026-06-28..2026-12-12. Update here
 # when the seasonal timetable changes.
 TRAIN_SCHEDULE = {
@@ -41,10 +43,6 @@ TRAIN_SCHEDULE = {
     "6909": {"dep": "07:05", "arr": "07:30"},
     "6911": {"dep": "07:47", "arr": "08:11"},
     "6913": {"dep": "10:14", "arr": "10:40"},
-    "6917": {"dep": "12:55", "arr": "13:22"},
-    "6923": {"dep": "17:07", "arr": "17:30"},
-    "6925": {"dep": "18:49", "arr": "19:13"},
-    "6927": {"dep": "22:08", "arr": "22:32"},
 }
 
 # Posts containing at least one of these word roots get forwarded (provided

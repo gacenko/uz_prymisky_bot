@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .venv/
 *.session
+.DS_Store
