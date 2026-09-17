@@ -146,6 +146,7 @@ def build_delay_blocks(text: str) -> tuple[list[str], bool]:
             if new_dep < CUTOFF_TIME:
                 continue
             new_arr = add_minutes(sched["arr"], delay_min)
+            lines.append(f"Графік по розкладу: {sched['dep']}-{sched['arr']}")
             lines.append(f"🕐 Розрахунково: Княжичі відпр. {new_dep} → Березняки приб. {new_arr}")
 
         blocks.append("\n".join(lines))
